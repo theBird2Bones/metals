@@ -671,6 +671,22 @@ class Compilers(
         .map { list =>
           adjust.adjustCompletionListInPlace(list)
           list
+            .getItems()
+            .asScala
+            .foreach(
+              _.setCommand(
+                ServerCommands.ScalafixRunOnly.toLsp(
+                  new RunScalafixRulesParams(
+                    new TextDocumentPositionParams(
+                      params.getTextDocument,
+                      params.getPosition,
+                    ),
+                    List("OrganizeImports").asJava,
+                  )
+                )
+              )
+            )
+          list
         }
     }.getOrElse(Future.successful(new CompletionList(Nil.asJava)))
 
