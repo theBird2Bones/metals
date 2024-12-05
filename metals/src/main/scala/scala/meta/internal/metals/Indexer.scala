@@ -33,7 +33,10 @@ import org.eclipse.lsp4j.Position
  * Coordinates build target data fetching and caching, and the re-computation of various
  * indexes based on it.
  */
-case class Indexer(indexProviders: IndexProviders)(implicit rc: ReportContext) {
+case class Indexer(
+    indexProviders: IndexProviders,
+    scalafixProvider: ScalafixProvider,
+)(implicit rc: ReportContext) {
   import indexProviders._
 
   private implicit def ec: ExecutionContextExecutorService = executionContext
@@ -108,6 +111,7 @@ case class Indexer(indexProviders: IndexProviders)(implicit rc: ReportContext) {
           importedBuild.scalacOptions,
           bspSession.map(_.mainConnection),
         )
+        // прогрев должен быть где-то тут. Так же через buildTarget или около того
         data.addJavacOptions(
           importedBuild.javacOptions,
           bspSession.map(_.mainConnection),
@@ -117,6 +121,11 @@ case class Indexer(indexProviders: IndexProviders)(implicit rc: ReportContext) {
           importedBuild.dependencyModules
         )
 
+        scribe.info(
+          s"found items wrapper: ${importedBuild.wrappedSources.getItems.asScala}"
+        )
+        // found items: ArrayBuffer() при старте и больше не вызывается, если прыгать по файлам
+
         // For "wrapped sources", we create dedicated TargetData.MappedSource instances,
         // able to convert back and forth positions from the user-facing file to
         // the compiler-facing actual underlying source.
@@ -125,17 +134,24 @@ case class Indexer(indexProviders: IndexProviders)(implicit rc: ReportContext) {
           sourceItem <- item.getSources.asScala
         } {
           val path = sourceItem.getUri.toAbsolutePath
+          scribe.info(s"inside wrapped indexer by path: ${path}")
           val mappedSource =
             if (path.isScalaScript) createMappedSourceForScript(sourceItem)
             else simpleMappedSource(sourceItem)
           data.addMappedSource(path, mappedSource)
         }
+        scribe.info(s"after wrapped found items")
+        scribe.info(s"found items: ${importedBuild.sources.getItems.asScala}")
         for {
           item <- importedBuild.sources.getItems.asScala
           source <- item.getSources.asScala
         } {
+          scribe.info(
+            s"inside indexer by path: ${source.getUri().toAbsolutePath}"
+          )
           data.addSourceItem(source, item.getTarget)
         }
+        scribe.info(s"after found items")
       }
     timerProvider.timedThunk(
       "post update build targets stuff",
@@ -212,6 +228,20 @@ case class Indexer(indexProviders: IndexProviders)(implicit rc: ReportContext) {
     }
 
     val targets = buildTargets.allBuildTargetIds
+    // ask: таргет вообще ни о чем не говорит, сюда проливается project и tarhet
+    // preload scalafix
+    val version =
+      buildTargets.allScala
+        .map(
+          _.scalaInfo.getScalaVersion()
+        )
+        .toSet
+        .toList
+    version.foreach { v =>
+      scribe.info(s"call scalafix for ${v}")
+      scalafixProvider.load(v)
+    }
+
     buildTargetClasses
       .rebuildIndex(targets)
       .foreach { _ =>

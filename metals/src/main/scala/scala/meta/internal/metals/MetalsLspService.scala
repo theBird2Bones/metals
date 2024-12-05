@@ -678,8 +678,8 @@ abstract class MetalsLspService(
   def initialized(): Future[Unit] =
     if (wasInitialized.compareAndSet(false, true)) {
       registerNiceToHaveFilePatterns()
-
       for {
+        _ <- Future(scribe.info(s"Gonna initialize it"))
         _ <- loadFingerPrints()
         _ <-
           Future
@@ -688,6 +688,11 @@ abstract class MetalsLspService(
                 onInitialized(),
                 Future(workspaceSymbols.indexClasspath()),
                 Future(formattingProvider.load()),
+                // Future(scalafixProvider.)
+                // тут надо сделать scalafix.load()
+                /*
+                могут быть разные версии скалы. Надо Получить build target
+                 */
               )
             )
       } yield ()
@@ -744,6 +749,7 @@ abstract class MetalsLspService(
     recentlyOpenedFiles.add(path)
     val prevBuildTarget = focusedDocumentBuildTarget.getAndUpdate { current =>
       buildTargets
+        // .allScala надо найти все версии, которые используются и только для минор версии греть. Патч не надо
         .inverseSources(path)
         .getOrElse(current)
     }
@@ -789,6 +795,18 @@ abstract class MetalsLspService(
                 testProvider.didOpen(path),
               )
             )
+            .flatMap { case _ =>
+              buildTargets.scalaVersion(path) match {
+                case None => Future.unit
+                case Some(value) =>
+                  // Future(scribe.info(s"load scalafix cache for path ${path} and version: ${value}"))
+                  // scribe.info(
+                  //   s"load scalafix cache for path ${path} and version: ${value}"
+                  // )
+                  scalafixProvider.load(value)
+                // todo: не работает, надо разобраться как metals кеширует данные под капотом
+              }
+            }
             .ignoreValue
         }
         maybeImportFileAndLoad(path, load)
