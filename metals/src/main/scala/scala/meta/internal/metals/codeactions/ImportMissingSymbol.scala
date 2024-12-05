@@ -6,8 +6,10 @@ import scala.concurrent.Future
 import scala.meta.internal.metals.BuildTargets
 import scala.meta.internal.metals.Compilers
 import scala.meta.internal.metals.MetalsEnrichments._
+import scala.meta.internal.metals.RunScalafixRulesParams
 import scala.meta.internal.metals.ScalaVersions
 import scala.meta.internal.metals.ScalacDiagnostic
+import scala.meta.internal.metals.ServerCommands
 import scala.meta.internal.metals.codeactions.CodeAction
 import scala.meta.pc.CancelToken
 
@@ -89,6 +91,14 @@ class ImportMissingSymbol(compilers: Compilers, buildTargets: BuildTargets)
               kind = l.CodeActionKind.QuickFix,
               diagnostics = List(diagnostic),
               changes = edit,
+              command = Some(
+                ServerCommands.ScalafixRunOnly.toLsp(
+                  new RunScalafixRulesParams(
+                    textDocumentPositionParams,
+                    List("OrganizeImports").asJava,
+                  )
+                )
+              ),
             )
           }.toSeq
         }

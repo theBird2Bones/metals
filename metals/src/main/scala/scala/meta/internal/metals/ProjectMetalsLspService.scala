@@ -181,6 +181,7 @@ class ProjectMetalsLspService(
     connectionBspStatus,
     mainBuildTargetsData,
     this,
+    scalafixProvider,
   )
 
   protected val onBuildChanged: BatchedFunction[AbsolutePath, Unit] =
@@ -864,7 +865,26 @@ class ProjectMetalsLspService(
   ): Future[Unit] =
     for {
       _ <- maybeAmendScalaCliBspConfig(path)
-      _ <- maybeImportScript(path).getOrElse(load())
+      _ <- maybeImportScript(path)
+        .map(
+          _.flatMap(_ =>
+            Future(
+              scribe.info(
+                "inside maybeImportFileAndLoad with ProjectMetalsLspService. maybeImportScript"
+              )
+            )
+          )
+        )
+        .getOrElse(
+          load()
+            .flatMap(_ =>
+              Future(
+                scribe.info(
+                  "inside maybeImportFileAndLoad with ProjectMetalsLspService. load"
+                )
+              )
+            )
+        )
     } yield ()
 
   override def resetService(): Unit = {

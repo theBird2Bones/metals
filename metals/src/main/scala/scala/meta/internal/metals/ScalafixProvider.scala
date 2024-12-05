@@ -88,6 +88,7 @@ case class ScalafixProvider(
       rules: List[String],
       retried: Boolean = false,
   ): Future[List[l.TextEdit]] = {
+    scribe.info("begin runScalafixRules. ScalafixProvider")
     val fromDisk = file.toInput
     val inBuffers = file.toInputFromBuffers(buffers)
 
@@ -384,6 +385,7 @@ case class ScalafixProvider(
 
     val result = for {
       api <- getScalafix(scalaTarget.scalaVersion)
+      _ <- Future(scribe.info("called scalafix api"))
       urlClassLoaderWithExternalRule <- getRuleClassLoader(
         scalafixRulesKey,
         api.getClass.getClassLoader,
@@ -415,6 +417,10 @@ case class ScalafixProvider(
           suggestConfigAmend,
         )
       } yield {
+        // интересен этот момент
+        scribe.info(
+          s"before getting scalafix api, path:${diskFilePath}, rules: ${rules}"
+        )
         val evaluated = api
           .newArguments()
           .withScalaVersion(scalaVersion)
@@ -573,21 +579,31 @@ case class ScalafixProvider(
     }
   }
 
+  def load(scalaVersion: ScalaVersion): Future[Unit] =
+    getScalafix(scalaVersion)
+      .map(
+        _.newArguments().evaluate()
+      )
+      .ignoreValue
+
   private def getScalafix(
       scalaVersion: ScalaVersion
   ): Future[Scalafix] = Future {
-    scalafixCache.getOrElseUpdate(
+    scribe.info("start getScalafix")
+    val ch = scalafixCache.getOrElseUpdate(
       scalaVersion, {
         workDoneProgress.trackBlocking("Downloading scalafix") {
           val scalafix =
             if (scalaVersion.startsWith("2.11")) scala211Fallback
             else
               Scalafix.fetchAndClassloadInstance(scalaVersion)
+          scribe.info("scalafix loaded")
           scalafix
         }
       },
     )
-
+    scribe.info("got scalafix oncomplete")
+    ch
   }
 
   private def scala211Fallback: Scalafix = {

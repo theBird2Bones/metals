@@ -54,8 +54,9 @@ class ConnectionProvider(
     bspStatus: bsp.ConnectionBspStatus,
     mainBuildTargetsData: TargetData,
     indexProviders: IndexProviders,
+    scalafixProvider: ScalafixProvider,
 )(implicit ec: ExecutionContextExecutorService, rc: ReportContext)
-    extends Indexer(indexProviders)
+    extends Indexer(indexProviders, scalafixProvider)
     with Cancelable {
   import Connect.connect
   import indexProviders._

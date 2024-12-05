@@ -74,7 +74,7 @@ class FallbackMetalsLspService(
   override val projectInfo: MetalsServiceInfo =
     MetalsServiceInfo.FallbackService
 
-  override val indexer: Indexer = Indexer(this)
+  override val indexer: Indexer = Indexer(this, scalafixProvider)
 
   def buildData(): Seq[BuildTool] =
     scalaCli.lastImportedBuilds.map {
@@ -102,7 +102,13 @@ class FallbackMetalsLspService(
           if (prev.contains(path)) Future.unit
           else scalaCli.start(path)
         }
-      _ <- load()
+      _ <- load().flatMap(_ =>
+        Future(
+          scribe.info(
+            "inside maybeImportFileAndLoad with FallbackMetalsLspService"
+          )
+        )
+      )
     } yield ()
 
   override protected def onBuildTargetChanges(

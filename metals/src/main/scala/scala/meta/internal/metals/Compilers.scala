@@ -92,6 +92,15 @@ class Compilers(
 )(implicit ec: ExecutionContextExecutorService, rc: ReportContext)
     extends Cancelable {
 
+  /*
+  Надо разобраться, почему прогрев не помогает делать вставку быстрее.
+   */
+  // Random
+  // HashMap // разная скорость вставки, если менять пакеты
+  // UUIDGenerator  // этот медленно вставляется даже без кешей. С ними будто начальная вставка быстрее на 1с
+
+  // играет ли роль при запуске кеша WARN  Could not load snapshot text for
+
   val compilerConfiguration = new CompilerConfiguration(
     workspace,
     config,
@@ -669,7 +678,21 @@ class Compilers(
       pc.complete(offsetParams)
         .asScala
         .map { list =>
+          val fixImports =
+            ServerCommands.ScalafixRunOnly.toLsp(
+              new RunScalafixRulesParams(
+                new TextDocumentPositionParams(
+                  params.getTextDocument,
+                  params.getPosition,
+                ),
+                List("OrganizeImports").asJava,
+              )
+            )
           adjust.adjustCompletionListInPlace(list)
+          list
+            .getItems()
+            .asScala
+            .foreach(_.setCommand(fixImports))
           list
         }
     }.getOrElse(Future.successful(new CompletionList(Nil.asJava)))
