@@ -137,6 +137,10 @@ object AutoImports:
    * @param indexedContext A context of the position where the autoImport is invoked
    * @param renames A function that returns the name of the given symbol which is renamed on import statement.
    */
+  //todo: extends this with scalafix rules.
+  // найти такую же логику для скала2, класс или метод называется иначе
+  // сначала скала2 чиним
+
   class AutoImportsGenerator(
       val pos: SourcePosition,
       importPosition: AutoImportPosition,
@@ -301,7 +305,7 @@ object AutoImports:
     @tailrec
     def lastPackageDef(
         prev: Option[PackageDef],
-        tree: Tree,
+        tree: Tree, // compiler tree
     ): Option[PackageDef] =
       tree match
         case curr @ PackageDef(_, (next: PackageDef) :: Nil)
@@ -324,6 +328,8 @@ object AutoImports:
 
     def forScalaSource: Option[AutoImportPosition] =
       lastPackageDef(None, tree).map { pkg =>
+        // imports
+        // найти похожее для скала2
         val lastImportStatement =
           pkg.stats.takeWhile(_.isInstanceOf[Import]).lastOption
         val (lineNumber, padTop) = lastImportStatement match

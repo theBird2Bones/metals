@@ -42,6 +42,7 @@ class CompletionProvider(
     referenceCounter: CompletionItemPriority,
 )(using reports: ReportContext):
   def completions(): CompletionList =
+    println("calling completions")
     val uri = params.uri
 
     val code = applyCompletionCursor(params)
@@ -65,6 +66,7 @@ class CompletionProvider(
         val indexedCtx = IndexedContext(locatedCtx)
         val completionPos =
           CompletionPos.infer(pos, params, path)(using newctx)
+        //todo: посмотреть исопльзованиеj
         val autoImportsGen = AutoImports.generator(
           completionPos.sourcePos,
           params.text,

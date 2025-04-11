@@ -50,13 +50,33 @@ trait AutoImports { this: MetalsGlobal =>
             val lastImportOpt = pkg.stats
               .takeWhile(_.isInstanceOf[Import])
               .lastOption
+            scribe.info(s"lastImportOpt: ${lastImportOpt}")
             val padTop = lastImportOpt.isEmpty
             val lastImportOrPkg = lastImportOpt.getOrElse(pkg.pid)
-            new AutoImportPosition(
-              pos.source.lineToOffset(lastImportOrPkg.pos.focusEnd.line),
-              text,
-              padTop
+            scribe.info(s"lastImportOrPkg: ${lastImportOrPkg}")
+            // here is pos creation
+            scribe.info(s"what is pos: ${pos}")
+            scribe.info(s"what is pos.source: ${pos.source}")
+            scribe.info(
+              s"what is lastImportOrPkg.pos.focusEnd: ${lastImportOrPkg.pos.focusEnd}"
             )
+
+            // from this generates final position. Fixes should be here, i guess
+
+            // entire file
+            // scribe.info(s"here is text inside autoImportPosition: '''${text}'''")
+
+            // maybe not here
+            // todo: try hack here position after getting position and scalafix.fix collect imports
+            val aipos =
+              new AutoImportPosition(
+                // offset is int by chars from file beginning
+                pos.source.lineToOffset(lastImportOrPkg.pos.focusEnd.line),
+                text,
+                padTop
+              )
+            scribe.info(s"here is autoImportPosition: ${aipos}")
+            aipos
           }
 
         def forScript(isAmmonite: Boolean) = {
@@ -117,6 +137,9 @@ trait AutoImports { this: MetalsGlobal =>
           else if (path.isScalaCLIGeneratedFile) forScript(isAmmonite = false)
           else None
 
+        scribe.info(
+          s"here is sources, scriptPos ${scriptPos}, forScalaSource: ${forScalaSource}, fileStart:${fileStart}"
+        )
         scriptPos
           .orElse(forScalaSource)
           .orElse(Some(fileStart))

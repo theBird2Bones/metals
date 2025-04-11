@@ -9,10 +9,12 @@ import java.{util => ju}
 import scala.annotation.nowarn
 import scala.annotation.tailrec
 import scala.collection.concurrent.TrieMap
+import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.ExecutionContextExecutorService
 import scala.concurrent.Future
 import scala.util.control.NonFatal
 
+import scala.meta._
 import scala.meta.inputs.Input
 import scala.meta.inputs.Position
 import scala.meta.internal
@@ -107,6 +109,8 @@ class Compilers(
     mtagsResolver,
     sourceMapper,
   )
+
+  // HashMap
 
   import compilerConfiguration._
 
@@ -673,13 +677,591 @@ class Compilers(
         outlineFilesProvider.getOutlineFiles(pc.buildTargetId())
       val offsetParams =
         CompilerOffsetParamsUtils.fromPos(pos, token, outlineFiles)
+      // pos -- is cursor pos
+      scribe.info(s"about to pc.complete") // взывает к scala pres compiler
+
       pc.complete(offsetParams)
         .asScala
         .map { list =>
+          scribe.info("[completions] insdie complete")
+          doScalafixMagic(offsetParams, list) // todo: \forall plan
           adjust.adjustCompletionListInPlace(list)
+          scribe.info(s"[completions] after adjustCompletionListInPlace")
           list
         }
     }.getOrElse(Future.successful(new CompletionList(Nil.asJava)))
+
+  // todo: разделить случаи, когда подбирается импорт, а когда поиск метода
+  def doScalafixMagic(
+      offsetParams: OffsetParams,
+      completionList: CompletionList,
+  ): Option[Unit] = {
+    scribe.info(s"Start examine completionList")
+    // todo: посмотреть как годзик сделал сортировку импорта
+
+    val suggestedImports =
+      completionList.getItems.asScala.view
+        .filter(
+          _.getAdditionalTextEdits() ne null
+        ) // должны быть только импорты. так как вставка импорта заменяет текущую строку, а через additional меняет импорт
+        .map(_.getAdditionalTextEdits())
+        .filterNot(_.isEmpty())
+
+    scribe.info(s"Start examine completionList.additionalTextEdits")
+    // scribe.info(s"suggestedImports: ${ suggestedImports.mkString("\n") }")
+
+    scribe.info("Start collect imports")
+    // val Some((globalImports, localImports)) =
+    trees
+      .get(offsetParams.uri.toAbsolutePath)
+      .map(collectImports)
+      .map {
+        case (
+              globalImports,
+              localImports, // crap, нет необходимости
+            ) =>
+          scribe.info(s"End collect global imports")
+          scribe.info(s"End collect local imports")
+
+          // todo: попробовать утащить в ~/Developer
+          /*
+                1. логическкие два шага по реализации
+                2. Найти Trees в CP,
+           */
+
+          scribe.info("Start organizeImports")
+
+          val groups =
+            suggestedImports.map { suggested =>
+              val asImport = suggested.asScala
+                .map(_.getNewText())
+                .map { stringToImport(_) }
+                .toSeq
+                .head // todo: сомнительно
+              // todo: попробовать pPrint
+
+              val res = asImport -> organizeImports(asImport +: globalImports)
+              // scribe.info(s"here is what organized: suggested: ${asImport}, rest: ${res}")
+              res
+            }.toList
+
+          val token = globalImports.head.tokens.head
+
+          val reevaluetedCompletions = groups.map { case suggested -> all =>
+            suggested -> insertOrganizedImports(token, all)
+          }
+
+          val mappings =
+            completionList
+              .getItems()
+              .asScala
+              .toList
+              .map(ci =>
+                s"${ci.getDetail().trim()}.${ci.getFilterText()}" -> ci
+              )
+              .toMap
+
+          reevaluetedCompletions.foldLeft(mappings) {
+            case (map, imports -> repr) =>
+              val maybeKey =
+                imports.toString.replace("`", "").replace("import ", "").trim()
+              scribe.info(s"Here is maybeKey: |${maybeKey}|")
+              map.get(maybeKey).fold(scribe.info("key not found")) {
+                textEditToFix =>
+                  // scribe.info(s"textEditToFix before fix: ${textEditToFix}")
+                  textEditToFix
+                    .setAdditionalTextEdits(
+                      List(
+                        new TextEdit(
+                          new LspRange(
+                            // token.pos,
+                            new LspPosition(
+                              token.pos.startLine,
+                              token.pos.startColumn,
+                            ), {
+                              val lastImportToken =
+                                globalImports.last.tokens.last.pos
+                              new LspPosition(
+                                lastImportToken.startLine,
+                                lastImportToken.endColumn,
+                              )
+                            },
+                          ),
+                          repr,
+                        )
+                      ).asJava
+                    )
+                  // scribe.info(s"textEditToFix after fix: ${textEditToFix}")
+              }
+              map
+          }
+          scribe.info("End organizeImports")
+      }
+  }
+
+  def stringToImport(rawImport: String): Import = {
+    import scala.meta._
+    scribe.info(s"rawImport: |${rawImport}|")
+    val rawSplitted = rawImport.replace("import", "").trim().split('.').toList
+    scribe.info(s"rawImport after split: |${rawSplitted.map(el => s"|$el|")}|")
+    val importPart = rawSplitted.dropRight(1)
+    scribe.info(s"rawSplitted: ${rawSplitted}")
+
+    val importees = rawSplitted.takeRight(1).map(rn => Importee.Name(Name(rn)))
+    scribe.info(s"importees: ${importees}")
+
+    val importTerm = importPart match {
+      case h :: t =>
+        t.foldLeft(Term.Name(h): Term.Ref) { case (acc, rhs) =>
+          Term.Select(acc, Term.Name(rhs))
+        }
+      case _ => ???
+    }
+    scribe.info(s"importTerm: ${importTerm}")
+    Import(List(Importer(importTerm, importees)))
+  }
+
+  private def insertOrganizedImports(
+      token: Token,
+      importGroups: Seq[ImportGroup],
+  ): String = {
+    val prettyPrintedGroups = importGroups.map {
+      case ImportGroup(index, imports) =>
+        index -> prettyPrintImportGroup(imports)
+    }
+
+    val blankLines = {
+      // Indices of all blank lines configured in `OrganizeImports.groups`, either automatically or
+      // manually.
+      val blankLineIndices = matchers.zipWithIndex.collect {
+        case (ImportMatcher.`---`, index) => index
+      }.toSet
+
+      // Checks each pair of adjacent import groups. Inserts a blank line between them if necessary.
+      importGroups map (_.index) sliding 2 filter (_.length == 2) flatMap {
+        case Seq(lhs, rhs) =>
+          val hasBlankLine = blankLineIndices exists (i => lhs < i && i < rhs)
+          if (hasBlankLine) Some((lhs + 1) -> "") else None
+      }
+    }
+
+    val withBlankLines = (prettyPrintedGroups ++ blankLines)
+      .sortBy { case (index, _) => index }
+      .map { case (_, lines) => lines }
+      .mkString("\n")
+
+    // Global imports within curly-braced packages must be indented accordingly, e.g.:
+    //
+    //   package foo {
+    //     package bar {
+    //       import baz
+    //       import qux
+    //     }
+    //   }
+    val indented = withBlankLines.linesIterator.zipWithIndex.map {
+      // The first line will be inserted at an already indented position.
+      case (line, 0) => line
+      case (line, _) if line.isEmpty => line
+      case (line, _) => " " * token.pos.startColumn + line
+    }
+
+    indented mkString "\n"
+  }
+
+  private def prettyPrintImportGroup(group: Seq[Importer]): String =
+    group
+      .map(i => "import " + importerSyntax(i))
+      .mkString("\n")
+
+  @tailrec private def collectImports(
+      tree: Tree
+  ): (Seq[Import], Seq[Import]) = {
+    def extractImports(stats: Seq[Stat]): (Seq[Import], Seq[Import]) = {
+      val (importStats, otherStats) = stats.span(_.is[Import])
+      val globalImports = importStats.map { case i: Import => i }
+      val localImports = otherStats.flatMap(_.collect { case i: Import => i })
+      (globalImports, localImports)
+    }
+
+    tree match {
+      case Source(Seq(p: Pkg)) => collectImports(p)
+      case Pkg(_, Seq(p: Pkg)) => collectImports(p)
+      case Source(stats) => extractImports(stats)
+      case Pkg(_, stats) => extractImports(stats)
+      case _ => (Nil, Nil)
+    }
+  }
+
+  private def organizeImports(imports: Seq[Import]) = {
+    // val noUnused = imports.map(_.importers) решили не убирать неиспользуемое.
+    // .flatMap()
+    // todo: читать конфиг скалафикса.
+
+    // буду считать, что есть только полностью определенные импорты.
+    val fullyQualifiedImporters =
+      imports.flatMap(_.importers) // .partition(isFullyQualified(_))
+    scribe.info(s"receive fullyQualifiedImporters: ${fullyQualifiedImporters}")
+
+    val grouped = groupImporters(fullyQualifiedImporters)
+    // scribe.info(s"receive groupImporters: ${grouped}")
+    grouped
+  }
+
+  val fxConfig: Configs.OrganizeImportsConfig =
+    Configs.OrganizeImportsConfig.default
+      .copy(
+        groups = Seq(
+          "re:javax?\\.",
+          "scala.",
+          "scala.meta.",
+          "*",
+        )
+      ) // todo: Подгружать автоматом
+  private val matchers = buildImportMatchers(fxConfig)
+  private val wildcardGroupIndex: Int = matchers indexOf ImportMatcher.*
+
+  private def buildImportMatchers(
+      config: Configs.OrganizeImportsConfig
+  ): Seq[ImportMatcher] = {
+    import ImportMatcher._
+    val withWildcard = {
+      val parsed = config.groups map parse
+      // The wildcard group should always exist. Appends one at the end if omitted.
+      if (parsed contains *) parsed else parsed :+ *
+    }
+
+    // Inserts a blank line marker between adjacent import groups when `blankLines` is `Auto`.
+    config.blankLines match {
+      case BlankLines.Manual => withWildcard
+      case BlankLines.Auto => withWildcard.flatMap(_ :: --- :: Nil)
+    }
+  }
+
+  private def groupImporters(
+      importers: Seq[Importer]
+  ) = {
+    val intermidiate = importers
+      .groupBy(matchImportGroup)
+      .mapValues(deduplicateImportees)
+      .mapValues(organizeImportGroup)
+      .map { case (index, imports) =>
+        ImportGroup(index, imports)
+      }
+      .toSeq
+      .sortBy(_.index)
+
+    intermidiate
+  }
+
+  private def matchImportGroup(importer: Importer): Int = {
+    val matchedGroups = matchers
+      .map(_ matches importer)
+      .zipWithIndex
+      .filter { case (length, _) => length > 0 }
+    if (matchedGroups.isEmpty) wildcardGroupIndex
+    else {
+      val (_, index) = matchedGroups.maxBy { case (length, _) => length }
+      index
+    }
+  }
+
+  import ImporterXtenstion._
+  private def deduplicateImportees(importers: Seq[Importer]): Seq[Importer] = {
+    import scala.collection.mutable
+    // Scalameta `Tree` nodes do not provide structural equality comparisons, here we pretty-print
+    // them and compare the string results.
+    val seenImportees = mutable.Set.empty[(String, String)]
+
+    importers.flatMap { importer =>
+      importer.filterImportees { importee =>
+        importee.is[Importee.Wildcard] || importee.is[Importee.GivenAll] ||
+        seenImportees.add(importee.syntax -> importer.ref.syntax)
+      }
+    }
+  }
+
+  private def organizeImportGroup(importers: Seq[Importer]): Seq[Importer] = {
+    val importeesSorted =
+      locally {
+        fxConfig.groupedImports match {
+          // case GroupedImports.Merge =>
+          //   mergeImporters(diagnostics)(importers, aggressive = false)
+          // case GroupedImports.AggressiveMerge =>
+          //   mergeImporters(diagnostics)(importers, aggressive = true)
+          // case GroupedImports.Explode =>
+          //   explodeImportees(importers)
+          // case GroupedImports.Keep =>
+          //   importers
+          case _ => importers
+        }
+      }.view
+        .map(coalesceImportees)
+        .map(sortImportees)
+        .toSeq
+
+    locally {
+      fxConfig.importsOrder match {
+        case ImportsOrder.Ascii =>
+          importeesSorted.sortBy(i => importerSyntax(i.copy()))
+        case ImportsOrder.SymbolsFirst =>
+          sortImportersSymbolsFirst(importeesSorted)
+        case ImportsOrder.Keep => importeesSorted
+      }
+    }
+  }
+
+  private def coalesceImportees(importer: Importer): Importer = {
+    val Importees(names, renames, unimports, givens, _, _) = importer.importees
+
+    fxConfig.coalesceToWildcardImportThreshold
+      .filter(importer.importees.length > _)
+      // Skips if there's no `Name`s or `Given`s. `Rename`s and `Unimport`s cannot be coalesced.
+      .filterNot(_ => names.isEmpty && givens.isEmpty)
+      .map {
+        case _ if givens.isEmpty => renames ++ unimports :+ Importee.Wildcard()
+        case _ if names.isEmpty => renames ++ unimports :+ Importee.GivenAll()
+        case _ =>
+          renames ++ unimports :+ Importee.GivenAll() :+ Importee.Wildcard()
+      }
+      .map(importees => importer.copy(importees = importees))
+      .getOrElse(importer)
+  }
+
+  private def sortImportees(importer: Importer): Importer = {
+    import ImportSelectorsOrder._
+
+    // The Scala language spec allows an import expression to have at most one final wildcard, which
+    // can only appears in the last position.
+    val (wildcards, others) =
+      importer.importees partition (i =>
+        i.is[Importee.Wildcard] || i.is[Importee.GivenAll]
+      )
+
+    val orderedImportees = fxConfig.importSelectorsOrder match {
+      case Ascii =>
+        Seq(others, wildcards) map (_.sortBy(_.syntax)) reduce (_ ++ _)
+      case SymbolsFirst =>
+        Seq(others, wildcards) map sortImporteesSymbolsFirst reduce (_ ++ _)
+      case Keep =>
+        importer.importees
+    }
+
+    // Checks whether importees of the input importer are already sorted. If yes, we should return
+    // the original importer to preserve the original source level formatting.
+    val alreadySorted =
+      fxConfig.importSelectorsOrder == Keep ||
+        (importer.importees corresponds orderedImportees) { (lhs, rhs) =>
+          lhs.syntax == rhs.syntax
+        }
+
+    if (alreadySorted) importer else importer.copy(importees = orderedImportees)
+  }
+
+  private def sortImporteesSymbolsFirst(
+      importees: List[Importee]
+  ): List[Importee] = {
+    val symbols = ArrayBuffer.empty[Importee]
+    val lowerCases = ArrayBuffer.empty[Importee]
+    val upperCases = ArrayBuffer.empty[Importee]
+
+    importees.foreach {
+      case i if i.syntax.head.isLower => lowerCases += i
+      case i if i.syntax.head.isUpper => upperCases += i
+      case i => symbols += i
+    }
+
+    List(symbols, lowerCases, upperCases) flatMap (_ sortBy (_.syntax))
+  }
+
+  private def importerSyntax(importer: Importer): String =
+    importer.pos match {
+      case pos: Position.Range =>
+        // Position found, implies that `importer` was directly parsed from the source code. Rewrite
+        // importees to ensure they follow the target dialect. For importers with a single importee,
+        // strip enclosing braces if they exist (or add/preserve them for Rename & Unimport on Scala 2).
+
+        val syntax = new StringBuilder(pos.text)
+
+        def patchSyntax(
+            t: Tree,
+            newSyntax: String,
+        ) = {
+          val start = t.pos.start - pos.start
+          syntax.replace(start, t.pos.end - pos.start, newSyntax)
+
+          if (importer.importees.length == 1) {
+            val end = t.pos.start - pos.start + newSyntax.length
+            (
+              syntax.take(start).lastIndexOf('{'),
+              syntax.indexOf('}', end),
+              importer.isCurlyBraced,
+            ) match {
+              case (-1, -1, true) =>
+                // braces required but not detected
+                syntax.append('}')
+                syntax.insert(start, '{')
+              case (opening, closing, false)
+                  if opening != -1 && closing != -1 =>
+                // braces detected but not required
+                syntax.delete(end, closing + 1)
+                syntax.delete(opening, start)
+              case _ =>
+            }
+          }
+        }
+
+        // traverse & patch backwards to avoid shifting indices
+        importer.importees.reverse.foreach {
+          case i @ Importee.Rename(_, _) =>
+            patchSyntax(i, i.copy().syntax)
+          case i @ Importee.Unimport(_) =>
+            patchSyntax(i, i.copy().syntax)
+          case i @ Importee.Wildcard() =>
+            patchSyntax(i, i.copy().syntax)
+          case i =>
+            patchSyntax(i, i.syntax)
+        }
+
+        syntax.toString
+
+      case Position.None =>
+        // Position not found, implies that `importer` is derived from certain existing import
+        // statement(s). Pretty-prints it.
+        val syntax = importer.syntax
+
+        // HACK: The Scalafix pretty-printer decides to add spaces after open and
+        // before close braces in imports with multiple importees, i.e., `import a.{
+        // b, c }` instead of `import a.{b, c}`. On the other hand, renames are
+        // pretty-printed without the extra spaces, e.g., `import a.{b => c}`. This
+        // behavior is not customizable and makes ordering imports by ASCII order
+        // complicated.
+        //
+        // This function removes the unwanted spaces as a workaround. In cases where
+        // users do want the inserted spaces, Scalafmt should be used after running
+        // the `OrganizeImports` rule.
+
+        // NOTE: We need to check whether the input importer is curly braced first and then replace
+        // the first "{ " and the last " }" if any. Naive string replacement is insufficient, e.g.,
+        // a quoted-identifier like "`{ d }`" may cause broken output.
+        (importer.isCurlyBraced, syntax lastIndexOfSlice " }") match {
+          case (_, -1) =>
+            syntax
+          case (true, index) =>
+            syntax.patch(index, "}", 2).replaceFirst("\\{ ", "{")
+          case _ =>
+            syntax
+        }
+    }
+
+  private def sortImportersSymbolsFirst(
+      importers: Seq[Importer]
+  ): Seq[Importer] =
+    importers.sortBy { importer =>
+      // See the comment marked with "issues/84" for why a `.copy()` is needed.
+      val syntax = importer.copy().syntax
+
+      importer match {
+        case Importer(_, Importee.Wildcard() :: Nil) =>
+          val wildcardSyntax = Importee.Wildcard().syntax
+          syntax.patch(
+            syntax.lastIndexOfSlice(s".$wildcardSyntax"),
+            ".\u0001",
+            2,
+          )
+
+        case _ if importer.isCurlyBraced =>
+          syntax
+            .replaceFirst("[{]", "\u0002")
+            .patch(syntax.lastIndexOf("}"), "\u0002", 1)
+
+        case _ => syntax
+      }
+    }
+  /////////////////////////// classes
+  private case class ImportGroup(index: Int, imports: Seq[Importer])
+
+  object ImporterXtenstion {
+    implicit class ImporterExtension(importer: Importer) {
+      def isCurlyBraced: Boolean = {
+        val importees @ Importees(_, renames, unimports, _, _, _) =
+          importer.importees
+
+        importees.length > 1 ||
+        ((
+          renames.length == 1 ||
+            unimports.length == 1
+        ) // &&
+        // !targetDialect.allowAsForImportRename
+        )
+      }
+
+      /**
+       * Returns an `Importer` with all the `Importee`s that are selected from the
+       * input `Importer` and satisfy a predicate. If all the `Importee`s are
+       * selected, the input `Importer` instance is returned to preserve the
+       * original source level formatting. If none of the `Importee`s are
+       * selected, returns a `None`.
+       */
+      def filterImportees(f: Importee => Boolean): Option[Importer] = {
+        val filtered = importer.importees filter f
+        if (filtered.length == importer.importees.length) Some(importer)
+        else if (filtered.isEmpty) None
+        else Some(importer.copy(importees = filtered))
+      }
+    }
+  }
+
+  /**
+   * Categorizes a list of `Importee`s into the following four groups:
+   *
+   *   - Names, e.g., `Seq`, `Option`, etc.
+   *   - Renames, e.g., `{Long => JLong}`, `Duration as D`, etc.
+   *   - Unimports, e.g., `{Foo => _}` or `Foo as _`.
+   *   - Givens, e.g., `given Foo`.
+   *   - GivenAll, i.e., `given`.
+   *   - Wildcard, i.e., `_` or `*`.
+   */
+  object Importees {
+    def unapply(importees: Seq[Importee]): Option[
+      (
+          List[Importee.Name],
+          List[Importee.Rename],
+          List[Importee.Unimport],
+          List[Importee.Given],
+          Option[Importee.GivenAll],
+          Option[Importee.Wildcard],
+      )
+    ] = {
+      val names = ArrayBuffer.empty[Importee.Name]
+      val renames = ArrayBuffer.empty[Importee.Rename]
+      val givens = ArrayBuffer.empty[Importee.Given]
+      val unimports = ArrayBuffer.empty[Importee.Unimport]
+      var maybeWildcard: Option[Importee.Wildcard] = None
+      var maybeGivenAll: Option[Importee.GivenAll] = None
+
+      importees foreach {
+        case i: Importee.Wildcard => maybeWildcard = Some(i)
+        case i: Importee.Unimport => unimports += i
+        case i: Importee.Rename => renames += i
+        case i: Importee.Name => names += i
+        case i: Importee.Given => givens += i
+        case i: Importee.GivenAll => maybeGivenAll = Some(i)
+      }
+
+      Option(
+        (
+          names.toList,
+          renames.toList,
+          unimports.toList,
+          givens.toList,
+          maybeGivenAll,
+          maybeWildcard,
+        )
+      )
+    }
+  }
+
+///////////////////////////////////////////////
 
   def autoImports(
       params: TextDocumentPositionParams,
@@ -687,6 +1269,7 @@ class Compilers(
       findExtensionMethods: Boolean,
       token: CancelToken,
   ): Future[ju.List[AutoImportsResult]] = {
+    scribe.info("gonna autoImports")
     withPCAndAdjustLsp(params) { (pc, pos, adjust) =>
       pc.autoImports(
         name,
@@ -1312,6 +1895,7 @@ class Compilers(
             workDoneProgress.trackBlocking(
               s"${config.icons().sync}Loading presentation compiler"
             ) {
+              // есть референс на сёрч
               ScalaLazyCompiler(
                 scalaTarget,
                 mtags,

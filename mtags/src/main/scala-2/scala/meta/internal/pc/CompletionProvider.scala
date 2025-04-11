@@ -46,6 +46,7 @@ class CompletionProvider(
   }
 
   def completions(): CompletionList = {
+    scribe.info("calling completions of completionProvider")
     val filename = params.uri().toString()
     val unit = addCompilationUnit(
       code = params.text,
@@ -55,6 +56,7 @@ class CompletionProvider(
     )
 
     val pos = unit.position(params.offset)
+    scribe.info(s"count unit position: ${pos}")
     val isSnippet = isSnippetEnabled(pos, params.text())
 
     val (i, completion, identOffsets, editRange, query) =
@@ -76,8 +78,12 @@ class CompletionProvider(
 
     val history = new ShortenedNames()
 
+    // completion items list
     val sorted = i.results.sorted(memberOrdering(query, history, completion))
+    // hmm
     lazy val importPosition = autoImportPosition(pos, params.text())
+
+    scribe.info(s"importPosition lazy: ${importPosition}")
     lazy val context = doLocateImportContext(pos)
 
     @tailrec
@@ -100,6 +106,7 @@ class CompletionProvider(
       }
     }
 
+    scribe.info(s"what is sorted looks like: ${sorted}")
     val items = sorted.iterator.zipWithIndex.map { case (member, idx) =>
       params.checkCanceled()
       val symbolName = member.symNameDropLocal.decoded
@@ -217,7 +224,10 @@ class CompletionProvider(
             short + suffix,
             editRange
           )
+
+          scribe.info(s"get edit: ${editRange}")
           item.setTextEdit(edit)
+          scribe.info(s"get item: ${item}")
           item.setAdditionalTextEdits(edits.asJava)
         case w: WorkspaceMember =>
           def createTextEdit(identifier: String) =
@@ -241,8 +251,102 @@ class CompletionProvider(
                 context,
                 value
               )
+              scribe.info(s"workspace member: ${w}")
+              scribe.info(s"syntesized edits: ${edits}")
+              /*
+              here i start my experiments
+               */
+              //////////////////////
+              // scribe.info(s"workspace member tree: ${w.viaImport}") empty tree
+              scribe.info(s"get short: ${short}") // name of completion
+              // scribe.info(s"lastVisitedParentTree: ${findLastVisitedParentTree(pos)}")// lastVisitedParentTree: Some(HashMap_CURSOR_
+              // scribe.info(s"locateTree: ${locateTree(pos)}") //same as lastVisited
+              scribe.info(
+                s"get additionalTextEdits from member: ${w.additionalTextEdits}"
+              )
+
+              // locateTree(params.po)
+              scribe.info(s"here is unit: ${unit}")
+              scribe.info(s"here is pos: ${pos}")
+
+              // scribe.info(s"get pos.source.file.absolute.path: ${}")
+              // val file = new String(pos.source.content)
+
+              val lastImportPos = lastVisitedParentTrees
+                .collectFirst {
+                  case pkg: PackageDef if notPackageObject(pkg) => pkg
+                }
+                .withFilter { case pkg =>
+                  pkg.symbol != rootMirror.EmptyPackage || pkg.stats.headOption
+                    .exists(_.isInstanceOf[Import])
+                }
+                .flatMap(
+                  _.stats.takeWhile(_.isInstanceOf[Import]).lastOption
+                )
+                .map(_.pos)
+              scribe.info(
+                s"get if values: ${(w.additionalTextEdits ne null)}, ${w.additionalTextEdits.nonEmpty}, ${edits}"
+              )
+              scribe.info(s"autoImportPos: ${lastImportPos.map(_.line)}")
+              if (
+                (w.additionalTextEdits ne null) && w.additionalTextEdits.nonEmpty || edits.nonEmpty
+              ) {
+                val file = new String(
+                  pos.source
+                    .lines(
+                      0,
+                      lastImportPos.map(_.line).getOrElse(1) // todo: fix
+                    )
+                    .mkString("\n")
+                )
+                /*
+                 Реализация без Trees, через парсинг сурса с подбором последней позиции импорта
+                 */
+                // import scala.meta._
+                // scribe.info(s"get cut file. file: ${file}")
+                // scribe.info(s"get tree repr: ${ file.parse[Source] }")
+                //   @tailrec def collectImports(
+                //       tree: Tree
+                //   ): (Seq[Import], Seq[Import]) = {
+                //     def extractImports(stats: Seq[Stat]): (Seq[Import], Seq[Import]) = {
+                //       val (importStats, otherStats) = stats.span(_.is[Import])
+                //       val globalImports = importStats.map { case i: Import => i }
+                //       val localImports = otherStats.flatMap(_.collect { case i: Import => i })
+                //       (globalImports, localImports)
+                //     }
+
+                //     tree match {
+                //       case Source(Seq(p: Pkg)) => collectImports(p)
+                //       case Pkg(_, Seq(p: Pkg)) => collectImports(p)
+                //       case Source(stats) => extractImports(stats)
+                //       case Pkg(_, stats) => extractImports(stats)
+                //       case _ => (Nil, Nil)
+                //     }
+                //   }
+
+                // scribe.info(s"CollectedImports: ${collectImports(file.parse[Source].get)}")
+
+              }
+
+              // HashMap
+
+              /*
+                  todo: возможно надо брать подстроку дерева через parse по токену последнего импорта, который можно получить через range
+                        импорта
+               */
+
               item.setAdditionalTextEdits(
                 (edits ++ w.additionalTextEdits).asJava
+              )
+              /*
+              Если не пустой, то надо менять на то, что накручу через магию скалафикса
+              + отсюда же взять только импорты
+               */
+              scribe.info(
+                s"createTextEdit(short + suffix): $short , $suffix, ${w.wrap(short + suffix)}"
+              )
+              scribe.info(
+                s"createTextEdit(short + suffix): ${createTextEdit(short + suffix)}"
               )
               item.setTextEdit(createTextEdit(short + suffix))
           }
@@ -334,9 +438,12 @@ class CompletionProvider(
       }
       item
     }
+    // todo: here is all imports. should rearrange them
 
     val result = new CompletionList(items.toSeq.asJava)
+    scribe.info(s"collected items: ${result}")
     result.setIsIncomplete(i.isIncomplete)
+    scribe.info(s"here is call inside CompletionProvider: res ${result}")
     result
   }
 

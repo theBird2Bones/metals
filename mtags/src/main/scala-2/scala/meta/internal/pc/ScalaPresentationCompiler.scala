@@ -61,7 +61,7 @@ case class ScalaPresentationCompiler(
     buildTargetName: Option[String] = None,
     classpath: Seq[Path] = Nil,
     options: List[String] = Nil,
-    search: SymbolSearch = EmptySymbolSearch,
+    search: SymbolSearch = EmptySymbolSearch, // имеет java интерфейс
     ec: ExecutionContextExecutor = ExecutionContext.global,
     sh: Option[ScheduledExecutorService] = None,
     config: PresentationCompilerConfig = PresentationCompilerConfigImpl(),
@@ -220,8 +220,10 @@ case class ScalaPresentationCompiler(
       EmptyCompletionList(),
       params.token
     ) { pc =>
-      new CompletionProvider(pc.compiler(params), params)
-        .completions()
+      val res =
+        new CompletionProvider(pc.compiler(params), params).completions()
+      scribe.info(s"[scala presentation compiler]got completions: ${res}")
+      res
     }
   }
 

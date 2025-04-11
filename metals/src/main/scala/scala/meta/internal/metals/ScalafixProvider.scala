@@ -712,6 +712,9 @@ object ScalafixProvider {
       userConfig: UserConfiguration,
       rules: List[String],
   ): Set[Dependency] = {
+    scribe.info(
+      s"here is scalafixRulesDependencies: ${userConfig.scalafixRulesDependencies}"
+    )
     val fromSettings =
       userConfig.scalafixRulesDependencies.flatMap { dependencyString =>
         Try {

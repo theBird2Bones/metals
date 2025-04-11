@@ -227,6 +227,12 @@ trait Signatures { compiler: MetalsGlobal =>
     }
 
     // Returns the list of text edits to insert imports for symbols that got shortened.
+    // todo: закорячить сюда сборку импортов
+
+    /*
+    1. Сделать драфт-мр. Сделать гифку как работает и в чём суть. Предложить вариации как это можно сделать. Наши изменения и в скалафиксе.
+
+     */
     def autoImports(
         pos: Position,
         context: => Context,

@@ -314,6 +314,7 @@ class CompilerConfiguration(
       sources: Seq[Path],
       workspaceFallback: Option[SymbolSearch],
   ): SymbolSearch = try {
+    // todo: попробовать добавить тут метод на поиск trees
     new StandaloneSymbolSearch(
       workspace,
       classpath.map(AbsolutePath(_)),
