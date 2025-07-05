@@ -22,7 +22,7 @@ import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 
-import scalafix.interfaces.imports.OrganizeImportsDirect;
+// import scalafix.interfaces.imports.OrganizeImportsDirect;
 /**
  * The public API of the presentation compiler.
  *
@@ -309,9 +309,9 @@ public abstract class PresentationCompiler {
 		return this;
 	}
 
-	public PresentationCompiler withOrganizeImports(OrganizeImportsDirect organize) {
-		return this;
-	}
+	// public PresentationCompiler withOrganizeImports(OrganizeImportsDirect organize) {
+	// 	return this;
+	// }
 
 	/**
 	 * Construct a new presentation compiler with the given parameters.

@@ -12,7 +12,7 @@ import scala.meta.internal.pc.MetalsGlobal
 import scala.meta.pc.PresentationCompilerConfig.OverrideDefFormat
 
 import org.eclipse.{lsp4j => l}
-import scalafix.interfaces.imports.OrganizeImportsDirect
+// import scalafix.interfaces.imports.OrganizeImportsDirect
 
 trait OverrideCompletions { this: MetalsGlobal =>
 
@@ -290,8 +290,8 @@ trait OverrideCompletions { this: MetalsGlobal =>
             importContext,
             autoImport.offset,
             autoImport.indent,
-            autoImport.padTop,
-            OrganizeImportsDirect.noopInstance()
+            autoImport.padTop
+            // OrganizeImportsDirect.noopInstance()
           ),
           details
         )

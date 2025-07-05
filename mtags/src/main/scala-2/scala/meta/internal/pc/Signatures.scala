@@ -6,7 +6,6 @@ import java.nio.file.StandardOpenOption
 import java.{util => ju}
 
 import scala.collection.Seq
-import scala.collection.immutable.HashMap
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 import scala.{meta => m}
@@ -18,8 +17,10 @@ import scala.meta.pc
 import scala.meta.pc.SymbolDocumentation
 
 import org.eclipse.{lsp4j => l}
-import scalafix.interfaces.imports
-import scalafix.interfaces.imports.TermRef
+import scala.util.Failure
+import scala.util.Success
+// import scalafix.interfaces.imports
+// import scalafix.interfaces.imports.TermRef
 
 trait Signatures { compiler: MetalsGlobal =>
 
@@ -69,8 +70,19 @@ trait Signatures { compiler: MetalsGlobal =>
       )
       val tpeString = shortType(tpe, history).toString()
 
-      val allImports =
-        (for {
+      val edits = history.autoImports(pos, importPosition)
+
+      logg.logg(s"here is edits: ${edits}")
+
+      val imports = edits
+        .map { te =>
+          str2Import(te.getNewText())
+        }
+
+      logg.logg(s"here is imports: ${imports}")
+
+      val allImports = (
+        for {
           pkg <- lastVisitedParentTrees.collectFirst {
             case pkg: PackageDef if notPackageObject(pkg) => pkg
           }
@@ -80,74 +92,82 @@ trait Signatures { compiler: MetalsGlobal =>
           pkg.stats
             .takeWhile(_.isInstanceOf[Import])
             .map(_.asInstanceOf[Import])
-        }).getOrElse(Nil)
-
-      def exprtToTermRef(
-          e: Tree,
-          acc: List[String] = Nil
-      ): Option[scalafix.interfaces.imports.TermRef] = {
-        e match {
-          case Select(qual, name) =>
-            exprtToTermRef(qual, name.decoded :: acc)
-          case Ident(iName) =>
-            val i: scalafix.interfaces.imports.TermRef =
-              new scalafix.interfaces.imports.Ident {
-                override def name(): String = iName.decoded
-              }
-
-            val out =
-              acc.foldLeft(i) { case (ref, selName) =>
-                new scalafix.interfaces.imports.Select {
-                  override def qualifier()
-                      : scalafix.interfaces.imports.TermRef = ref
-
-                  override def name(): String = selName
-                }
-              }
-            Some(out)
-          case _ => None
         }
-      }
+      ).getOrElse(Nil)
 
-      def toInterfaceImport2(
-          i: Import
-      ): Option[scalafix.interfaces.imports.Import] = {
-        val selectors = i.selectors.map { sel => sel.name.decoded }
+      val OI = new OrganizedImports {}
+      val kek = scala.util.Try(
+        OI.sort(
+          imports.head,
+          allImports.map(importConverter(_))
+        )
+      )
 
-        exprtToTermRef(i.expr).map { xref =>
-          new scalafix.interfaces.imports.Import {
-            override def importers()
-                : ju.List[scalafix.interfaces.imports.Importer] = {
-              val importer =
-                new scalafix.interfaces.imports.Importer {
-                  override def ref(): imports.TermRef = xref
+      logg.logg(s"found kek: ${kek match {
+          case Failure(exception) => exception.getMessage()
+          case Success(value) => (value)
+        }}")
 
-                  override def importees(): ju.List[String] = selectors.asJava
-                }
-              List(importer).asJava
-            }
-          }
-        }
-      }
-
-      def toInterfaceImport(
-          i: Tree
-      ): Option[scalafix.interfaces.imports.Import] =
-        i match {
-          case i: Import => toInterfaceImport2(i)
-        }
-
-      if (allImports.nonEmpty) {
-        val converted =
-          allImports.flatMap { i =>
-            toInterfaceImport(i)
-          }
-
-        orgImports.organize(converted.asJava)
-      }
-
-      val edits = history.autoImports(pos, importPosition, orgImports)
       (tpeString, edits)
+    }
+
+    def str2Import(s: String): m.Import = {
+      import scala.meta._
+      val rawSplitted = s.replace("import", "").trim().split('.').toList
+      val importPart = rawSplitted.dropRight(1)
+
+      val importees =
+        rawSplitted.takeRight(1).map(rn => Importee.Name(Name(rn)))
+
+      val importTerm = importPart match {
+        case h :: t =>
+          t.foldLeft(Term.Name(h): Term.Ref) { case (acc, rhs) =>
+            Term.Select(acc, Term.Name(rhs))
+          }
+        case _ => ???
+      }
+      m.Import(List(Importer(importTerm, importees)))
+    }
+
+    //   {
+    //   /*
+    //     str2Import meet string: import java.nio.file.Files
+    //     str2Import meet importStr: List()
+    //   */
+    //   logg.logg(s"str2Import meet string: ${s}")
+    //   val importStr =
+    //     s
+    //     .replace("import ", "")
+    //     .trim()
+    //     .split('.')
+    //     .toList
+
+    //   logg.logg(s"str2Import meet importStr: ${importStr}")
+
+    //   val termRef = importStr.dropRight(1) match {
+    //     case head :: next =>
+    //       next.foldLeft(
+    //         m.Term.Name(head): m.Term.Ref
+    //       ) { case (acc, x) =>
+    //         m.Term.Select(acc, m.Term.Name(x))
+    //       }
+    //     case Nil => ???
+    //   }
+
+    //   logg.logg(s"str2Import meet termRef: ${termRef}")
+
+    //   val importer = m.Importer(
+    //     termRef,
+    //     List(m.Importee.Name(m.Term.Name(importStr.takeRight(1).head)))
+    //   )
+    //   logg.logg(s"str2Import meet importer: ${importer}")
+    //   m.Import(List(importer))
+    // }
+
+    def importConverter(i: Import): m.Import = {
+      logg.logg(s"welcome some import ${i}")
+
+      str2Import(i.toString())
     }
 
     def synthesize(
@@ -303,16 +323,16 @@ trait Signatures { compiler: MetalsGlobal =>
 
     def autoImports(
         pos: Position,
-        autoImportPosition: AutoImportPosition,
-        orgImports: imports.OrganizeImportsDirect
+        autoImportPosition: AutoImportPosition
+        // orgImports: imports.OrganizeImportsDirect
     ): List[l.TextEdit] = {
       autoImports(
         pos,
         compiler.doLocateImportContext(pos, Some(autoImportPosition)),
         autoImportPosition.offset,
         autoImportPosition.indent,
-        autoImportPosition.padTop,
-        orgImports
+        autoImportPosition.padTop
+        // orgImports
       )
     }
 
@@ -321,8 +341,8 @@ trait Signatures { compiler: MetalsGlobal =>
         context: => Context,
         lineStart: Int,
         inferIndent: => Int,
-        padTop: Boolean,
-        orgImports: imports.OrganizeImportsDirect
+        padTop: Boolean
+        // orgImports: imports.OrganizeImportsDirect
     ): List[l.TextEdit] = {
 
       val toImport = mutable.Map.empty[Symbol, List[ShortName]]
@@ -360,172 +380,171 @@ trait Signatures { compiler: MetalsGlobal =>
             s"${indent}import ${scope.fullname(owner)}.${name}"
           }
           .mkString(topPadding, "\n", "\n")
-        val imp = toImport.toSeq.map(symToImport.tupled).flatten
 
-        makeTextEdit(
-          imp.toList
-        ) :: Nil
+        val startPos = pos.withPoint(lineStart).focus
+        new l.TextEdit(startPos.toLsp, formatted) :: Nil
       } else {
         Nil
       }
     }
 
-    private def symToImport(
-        s: Symbol,
-        names: List[ShortName]
-    ): Option[scalafix.interfaces.imports.Import] = {
-      val tref =
-        s.ownersIterator
-          .filterNot(_.isRoot)
-          .foldRight(None: Option[scalafix.interfaces.imports.TermRef]) {
-            case (sym, None) =>
-              Option(
-                new scalafix.interfaces.imports.Ident {
-                  override def name(): String = sym.decodedName
-                }
-              )
-            case (sym, Some(ref)) =>
-              Some(
-                new scalafix.interfaces.imports.Select {
-                  override def qualifier()
-                      : scalafix.interfaces.imports.TermRef = ref
-                  override def name(): String = sym.decodedName
-                }
-              )
-          }
+    // private def symToImport(
+    //     s: Symbol,
+    //     names: List[ShortName]
+    // ): Option[scalafix.interfaces.imports.Import] = {
+    //   val tref =
+    //     s.ownersIterator
+    //       .filterNot(_.isRoot)
+    //       .foldRight(None: Option[scalafix.interfaces.imports.TermRef]) {
+    //         case (sym, None) =>
+    //           Option(
+    //             new scalafix.interfaces.imports.Ident {
+    //               override def name(): String = sym.decodedName
+    //             }
+    //           )
+    //         case (sym, Some(ref)) =>
+    //           Some(
+    //             new scalafix.interfaces.imports.Select {
+    //               override def qualifier()
+    //                   : scalafix.interfaces.imports.TermRef = ref
+    //               override def name(): String = sym.decodedName
+    //             }
+    //           )
+    //       }
 
-      val asImport = tref.map { xref =>
-        new scalafix.interfaces.imports.Import {
-          override def importers()
-              : ju.List[scalafix.interfaces.imports.Importer] = {
-            val importer =
-              new scalafix.interfaces.imports.Importer {
-                override def ref(): imports.TermRef = xref
+    //   val asImport = tref.map { xref =>
+    //     new scalafix.interfaces.imports.Import {
+    //       override def importers()
+    //           : ju.List[scalafix.interfaces.imports.Importer] = {
+    //         val importer =
+    //           new scalafix.interfaces.imports.Importer {
+    //             override def ref(): imports.TermRef = xref
 
-                override def importees(): ju.List[String] =
-                  names.map(_.name.toString()).asJava
-              }
-            List(importer).asJava
-          }
-        }
-      }
-      asImport
-    }
+    //             override def importees(): ju.List[String] =
+    //               names.map(_.name.toString()).asJava
+    //           }
+    //         List(importer).asJava
+    //       }
+    //     }
+    //   }
+    //   asImport
+    // }
 
-    private def makeTextEdit(
-        imps: List[imports.Import]
-    ): l.TextEdit = {
-      val allImports =
-        (for {
-          pkg <- lastVisitedParentTrees.collectFirst {
-            case pkg: PackageDef if notPackageObject(pkg) => pkg
-          }
-          if pkg.symbol != rootMirror.EmptyPackage ||
-            pkg.stats.headOption.exists(_.isInstanceOf[Import])
-        } yield {
-          pkg.stats
-            .takeWhile(_.isInstanceOf[Import])
-            .map(_.asInstanceOf[Import])
-        }).getOrElse(List.empty)
-      val converted =
-        imps ::: allImports.flatMap(toInterfaceImport)
+//     private def makeTextEdit(
+//         imps: List[imports.Import]
+//     ): l.TextEdit = {
+//       val allImports =
+//         (for {
+//           pkg <- lastVisitedParentTrees.collectFirst {
+//             case pkg: PackageDef if notPackageObject(pkg) => pkg
+//           }
+//           if pkg.symbol != rootMirror.EmptyPackage ||
+//             pkg.stats.headOption.exists(_.isInstanceOf[Import])
+//         } yield {
+//           pkg.stats
+//             .takeWhile(_.isInstanceOf[Import])
+//             .map(_.asInstanceOf[Import])
+//         }).getOrElse(List.empty)
+//       val converted =
+//         imps ::: allImports.flatMap(toInterfaceImport)
 
-      val orged = orgImports
-        .organize(converted.asJava)
-        .asScala
-        .toList
-        .map(_.asScala.toList)
+// //mark тут создание импорта
+//       // val orged = orgImports
+//       //   .organize(converted.asJava)
+//       //   .asScala
+//       //   .toList
+//       //   .map(_.asScala.toList)
 
-      val poses = allImports.map(_.pos)
+//       val poses = allImports.map(_.pos)
 
-      val min = poses.minBy(_.start)
-      val max = poses.maxBy(_.end)
+//       val min = poses.minBy(_.start)
+//       val max = poses.maxBy(_.end)
 
-      val prettyPrinted =
-        orged
-          .map { group =>
-            group
-              .map { i =>
-                s"import ${i.importers().asScala.map(importerToString).mkString(",")}"
-              }
-              .mkString("\n")
-          }
-          .mkString("\n\n")
+//       val prettyPrinted =
+//         orged
+//           .map { group =>
+//             group
+//               .map { i =>
+//                 s"import ${i.importers().asScala.map(importerToString).mkString(",")}"
+//               }
+//               .mkString("\n")
+//           }
+//           .mkString("\n\n")
 
-      new l.TextEdit(min.withEnd(max.end).toLsp, prettyPrinted)
-    }
+//       new l.TextEdit(min.withEnd(max.end).toLsp, prettyPrinted)
+//     }
 
-    private def importerToString(
-        i: scalafix.interfaces.imports.Importer
-    ): String = {
-      termRefToString(i.ref(), Nil) + "." + i.importees().asScala.head
-    }
+    // private def importerToString(
+    //     i: scalafix.interfaces.imports.Importer
+    // ): String = {
+    //   termRefToString(i.ref(), Nil) + "." + i.importees().asScala.head
+    // }
 
-    private def termRefToString(
-        tr: scalafix.interfaces.imports.TermRef,
-        acc: List[String]
-    ): String = {
-      tr match {
-        case i: imports.Ident => i.name() + "." + acc.mkString(".")
-        case s: imports.Select =>
-          termRefToString(s.qualifier(), s.name() :: acc)
-      }
-    }
+    // private def termRefToString(
+    //     tr: scalafix.interfaces.imports.TermRef,
+    //     acc: List[String]
+    // ): String = {
+    //   tr match {
+    //     case i: imports.Ident => i.name() + "." + acc.mkString(".")
+    //     case s: imports.Select =>
+    //       termRefToString(s.qualifier(), s.name() :: acc)
+    //   }
+    // }
 
-    private def toInterfaceImport(
-        i: Tree
-    ): Option[scalafix.interfaces.imports.Import] =
-      i match {
-        case i: Import => toInterfaceImport2(i)
-      }
+    // private def toInterfaceImport(
+    //     i: Tree
+    // ): Option[scalafix.interfaces.imports.Import] =
+    //   i match {
+    //     case i: Import => toInterfaceImport2(i)
+    //   }
   }
-  private def toInterfaceImport2(
-      i: Import
-  ): Option[scalafix.interfaces.imports.Import] = {
-    val selectors = i.selectors.map { sel => sel.name.decoded }
+  // private def toInterfaceImport2(
+  //     i: Import
+  // ): Option[scalafix.interfaces.imports.Import] = {
+  //   val selectors = i.selectors.map { sel => sel.name.decoded }
 
-    exprtToTermRef(i.expr).map { xref =>
-      new scalafix.interfaces.imports.Import {
-        override def importers()
-            : ju.List[scalafix.interfaces.imports.Importer] = {
-          val importer =
-            new scalafix.interfaces.imports.Importer {
-              override def ref(): imports.TermRef = xref
+  //   exprtToTermRef(i.expr).map { xref =>
+  //     new scalafix.interfaces.imports.Import {
+  //       override def importers()
+  //           : ju.List[scalafix.interfaces.imports.Importer] = {
+  //         val importer =
+  //           new scalafix.interfaces.imports.Importer {
+  //             override def ref(): imports.TermRef = xref
 
-              override def importees(): ju.List[String] = selectors.asJava
-            }
-          List(importer).asJava
-        }
-      }
-    }
-  }
+  //             override def importees(): ju.List[String] = selectors.asJava
+  //           }
+  //         List(importer).asJava
+  //       }
+  //     }
+  //   }
+  // }
 
-  private def exprtToTermRef(
-      e: Tree,
-      acc: List[String] = Nil
-  ): Option[scalafix.interfaces.imports.TermRef] = {
-    e match {
-      case Select(qual, name) =>
-        exprtToTermRef(qual, name.decoded :: acc)
-      case Ident(iName) =>
-        val i: scalafix.interfaces.imports.TermRef =
-          new scalafix.interfaces.imports.Ident {
-            override def name(): String = iName.decoded
-          }
+  // private def exprtToTermRef(
+  //     e: Tree,
+  //     acc: List[String] = Nil
+  // ): Option[scalafix.interfaces.imports.TermRef] = {
+  //   e match {
+  //     case Select(qual, name) =>
+  //       exprtToTermRef(qual, name.decoded :: acc)
+  //     case Ident(iName) =>
+  //       val i: scalafix.interfaces.imports.TermRef =
+  //         new scalafix.interfaces.imports.Ident {
+  //           override def name(): String = iName.decoded
+  //         }
 
-        val out =
-          acc.foldLeft(i) { case (ref, selName) =>
-            new scalafix.interfaces.imports.Select {
-              override def qualifier(): scalafix.interfaces.imports.TermRef =
-                ref
+  //       val out =
+  //         acc.foldLeft(i) { case (ref, selName) =>
+  //           new scalafix.interfaces.imports.Select {
+  //             override def qualifier(): scalafix.interfaces.imports.TermRef =
+  //               ref
 
-              override def name(): String = selName
-            }
-          }
-        Some(out)
-      case _ => None
-    }
-  }
+  //             override def name(): String = selName
+  //           }
+  //         }
+  //       Some(out)
+  //     case _ => None
+  //   }
+  // }
 
   implicit class XtensionNameMetals(name: Name) {
     def otherName: Name =
@@ -695,5 +714,17 @@ trait Signatures { compiler: MetalsGlobal =>
         s"$name: ${paramTypeString}$default"
       }
     }
+  }
+}
+
+object logg {
+  def logg(message: String) = {
+    Files.write(
+      Paths.get("/tmp/metals/signatures"),
+      (message + "\n").getBytes,
+      StandardOpenOption.CREATE,
+      StandardOpenOption.WRITE,
+      StandardOpenOption.APPEND
+    )
   }
 }

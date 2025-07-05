@@ -26,7 +26,7 @@ import scala.meta.pc.SymbolSearch
 import ch.epfl.scala.bsp4j.BuildTargetIdentifier
 import org.eclipse.lsp4j.InitializeParams
 
-import scalafix.interfaces.imports.OrganizeImportsDirect
+// import scalafix.interfaces.imports.OrganizeImportsDirect
 
 class CompilerConfiguration(
     workspace: AbsolutePath,
@@ -55,7 +55,7 @@ class CompilerConfiguration(
       symbolSearch: SymbolSearch,
       classpath: Seq[Path],
       referenceCounter: CompletionItemPriority,
-      organizeImportsDirect: OrganizeImportsDirect,
+      // organizeImportsDirect: OrganizeImportsDirect,
   ) extends MtagsPresentationCompiler {
     private val mtags =
       mtagsResolver.resolve(scalaVersion).getOrElse(MtagsBinaries.BuildIn)
@@ -68,7 +68,7 @@ class CompilerConfiguration(
         "default",
         symbolSearch,
         referenceCounter,
-        organizeImportsDirect,
+        // organizeImportsDirect,
       )
 
     def shutdown(): Unit = standalone.shutdown()
@@ -83,7 +83,7 @@ class CompilerConfiguration(
         sources: Seq[Path],
         workspaceFallback: Option[SymbolSearch],
         referenceCounter: CompletionItemPriority,
-        organizeImportsDirect: OrganizeImportsDirect,
+        // organizeImportsDirect: OrganizeImportsDirect,
     ): StandaloneCompiler = {
       val search =
         createStandaloneSearch(classpath, sources, workspaceFallback)
@@ -92,7 +92,7 @@ class CompilerConfiguration(
         search,
         classpath,
         referenceCounter,
-        organizeImportsDirect,
+        // organizeImportsDirect,
       )
     }
   }
@@ -166,7 +166,7 @@ class CompilerConfiguration(
       mtags: MtagsBinaries,
       search: SymbolSearch,
       referenceCounter: CompletionItemPriority,
-      organizeImportsDirect: OrganizeImportsDirect,
+      // organizeImportsDirect: OrganizeImportsDirect,
       additionalClasspath: Seq[Path] = Nil,
   ) extends LazyCompiler {
 
@@ -206,7 +206,7 @@ class CompilerConfiguration(
         name,
         search,
         referenceCounter,
-        organizeImportsDirect,
+        // organizeImportsDirect,
       )
         .withBuildTargetName(scalaTarget.displayName)
     }
@@ -218,7 +218,7 @@ class CompilerConfiguration(
         Nil,
         Some(search),
         referenceCounter,
-        organizeImportsDirect,
+        // organizeImportsDirect,
       ).standalone
 
   }
@@ -242,7 +242,7 @@ class CompilerConfiguration(
         mtags,
         worksheetSearch,
         referenceCounter,
-        OrganizeImportsDirect.noopInstance(),
+        // OrganizeImportsDirect.noopInstance(),
         classpath,
       )
     }
@@ -262,7 +262,7 @@ class CompilerConfiguration(
         pc,
         search,
         completionItemPriority,
-        OrganizeImportsDirect.noopInstance(),
+        // OrganizeImportsDirect.noopInstance(),
       )
         .newInstance(
           targetId.getUri(),
@@ -279,12 +279,12 @@ class CompilerConfiguration(
       pc: PresentationCompiler,
       search: SymbolSearch,
       completionItemPriority: CompletionItemPriority,
-      organizeImportsDirect: OrganizeImportsDirect,
+      // organizeImportsDirect: OrganizeImportsDirect,
   ): PresentationCompiler =
     pc.withSearch(search)
       .withExecutorService(ec)
       .withCompletionItemPriority(completionItemPriority)
-      .withOrganizeImports(organizeImportsDirect)
+      // .withOrganizeImports(organizeImportsDirect)
       .withWorkspace(workspace.toNIO)
       .withScheduledExecutorService(sh)
       .withReportsLoggerLevel(MetalsServerConfig.default.loglevel)
@@ -310,7 +310,7 @@ class CompilerConfiguration(
       name: String,
       symbolSearch: SymbolSearch,
       referenceCounter: CompletionItemPriority,
-      organizeImportsDirect: OrganizeImportsDirect,
+      // organizeImportsDirect: OrganizeImportsDirect,
   ): PresentationCompiler = {
     val pc = mtags match {
       case MtagsBinaries.BuildIn => new ScalaPresentationCompiler()
@@ -319,7 +319,12 @@ class CompilerConfiguration(
     }
 
     val filteredOptions = plugins.filterSupportedOptions(options)
-    configure(pc, symbolSearch, referenceCounter, organizeImportsDirect)
+    configure(
+      pc,
+      symbolSearch,
+      referenceCounter,
+      // organizeImportsDirect
+    )
       .newInstance(
         name,
         classpathSeq.asJava,

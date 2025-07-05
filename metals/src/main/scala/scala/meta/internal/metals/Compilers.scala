@@ -166,7 +166,7 @@ class Compilers(
                   search,
                   Nil,
                   completionItemPriority(),
-                  scalafix.loadOrganizeImports(java.util.Optional.empty()),
+                  // scalafix.loadOrganizeImports(java.util.Optional.empty()),
                 )
               }
             case None =>
@@ -179,7 +179,7 @@ class Compilers(
                 search,
                 Nil,
                 completionItemPriority(),
-                scalafix.loadOrganizeImports(java.util.Optional.empty()),
+                // scalafix.loadOrganizeImports(java.util.Optional.empty()),
               )
           }
         },
@@ -686,6 +686,8 @@ class Compilers(
         outlineFilesProvider.getOutlineFiles(pc.buildTargetId())
       val offsetParams =
         CompilerOffsetParamsUtils.fromPos(pos, token, outlineFiles)
+
+      // HashMap
 
       pc.complete(offsetParams)
         .asScala
@@ -1288,7 +1290,7 @@ class Compilers(
             sources,
             Some(search),
             completionItemPriority(),
-            scalafix.loadOrganizeImports(java.util.Optional.empty()),
+            // scalafix.loadOrganizeImports(java.util.Optional.empty()),
           )
         },
       )
@@ -1342,7 +1344,7 @@ class Compilers(
                 mtags,
                 search,
                 completionItemPriority(),
-                scalafix.loadOrganizeImports(java.util.Optional.empty()),
+                // scalafix.loadOrganizeImports(java.util.Optional.empty()),
               )
             }
           val key =
